@@ -1,0 +1,13 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+@keyframes blink-highlight {
+  0% { background-color: transparent; }
+  50% { background-color: rgba(59, 130, 246, 0.3); } /* Light blue glow */
+  100% { background-color: transparent; }
+}
+
+.animate-blink-highlight {
+  animation: blink-highlight 1.5s ease-in-out infinite;
+}
