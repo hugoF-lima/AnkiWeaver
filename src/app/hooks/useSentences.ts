@@ -2,13 +2,22 @@
 export type SentenceDTO = {
   jp: string;
   en: string;
+  pt?: string;
   has_audio: boolean;
   audio_id?: string;
 };
 
-export async function fetchSentencesFor(word: string, perPage = 10) {
-  const base = import.meta.env.DEV ? 'http://localhost:8000' : '';
-  const url = `${base}/api/sentences?word=${encodeURIComponent(word)}&per_page=${perPage}`;
+export async function fetchSentencesFor(
+  word: string,
+  perPage = 10,
+  page = 0,
+  options?: { random?: boolean }
+) {
+  //does this cause Cors errors? 
+  //const base = import.meta.env.DEV ? 'http://localhost:8000' : '';
+  //const url = `${base}/api/sentences?word=${encodeURIComponent(word)}&per_page=${perPage}`;
+  const random = options?.random ? '&random=1' : '';
+  const url = `/api/sentences?word=${encodeURIComponent(word)}&per_page=${perPage}&page=${page}${random}`;
   const res = await fetch(url);
   const text = await res.text();
 

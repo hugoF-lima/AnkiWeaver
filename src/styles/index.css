@@ -11,3 +11,135 @@
 .animate-blink-highlight {
   animation: blink-highlight 1.5s ease-in-out infinite;
 }
+
+@keyframes anki-marquee-x {
+  0% { transform: translateX(0); }
+  10% { transform: translateX(0); }
+  90% { transform: translateX(-50%); }
+  100% { transform: translateX(-50%); }
+}
+
+.anki-marquee {
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.anki-marquee__inner {
+  display: inline-flex;
+  gap: 2rem;
+  min-width: max-content;
+  animation: anki-marquee-x 10s linear infinite;
+}
+
+.anki-marquee__chunk {
+  display: inline-block;
+}
+
+:root {
+
+  /* Header Section  */
+
+  -anki-border-white: rgba(255, 255, 255, 0.25);
+  --anki-inner-glow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.15), 
+                     inset 0 0 10px rgba(255, 255, 255, 0.05);
+
+  /* Surface Colors - Dark Mode */
+  --anki-bg-start: #0f172a; /* slate-900 */
+  --anki-bg-end: #020617;   /* slate-950 */
+  --anki-bg-card: #1e293b;  /* slate-800 */
+  
+  /* Borders & Accents */
+  --anki-border: #334155;   /* slate-700 */
+  --anki-accent-primary: #3b82f6; /* blue-500 */
+  
+  /* Text */
+  --anki-text-main: #f8fafc;  /* slate-600 */
+  --anki-text-muted: #94a3b8; /* slate-400 */
+  --anki-text-error: #f87171; /* red-400 */
+  
+  /* Input/Select Specific */
+  --anki-input-bg: #0f172a;
+}
+
+/* Faster 2s cycle for a more urgent "Paste" prompt */
+@keyframes blink-invite-sync {
+  0%, 100% { 
+    border-bottom-color: rgba(255, 255, 255, 0.1); 
+    color: rgba(148, 163, 184, 0.3); /* slate-400 equivalent at low opacity */
+    box-shadow: none;
+  }
+  50% { 
+    border-bottom-color: rgba(59, 130, 246, 0.8); 
+    color: rgba(248, 250, 252, 0.8); /* slate-50 equivalent at high opacity */
+    box-shadow: 0 2px 10px -2px rgba(59, 130, 246, 0.4);
+  }
+}
+
+.animate-blink-invite {
+  animation: blink-invite-sync 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Target the placeholder specifically during the animation */
+.animate-blink-invite::placeholder {
+  animation: inherit;
+}
+
+/* Ensure focus still kills all animations immediately */
+.no-blink-on-focus:focus, 
+.no-blink-on-focus:focus::placeholder {
+  animation: none !important;
+  color: rgba(148, 163, 184, 0.5); /* Return placeholder to steady muted state */
+}
+
+/* The Subtle Light Dispersal remains intact */
+.discrete-input-glow:focus {
+  border-bottom-color: rgba(255, 255, 255, 0.5);
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.04), transparent 50%);
+  box-shadow: 0 4px 12px -4px rgba(255, 255, 255, 0.1);
+}
+
+.anki-hscroll {
+  scrollbar-width: none;
+}
+
+.anki-hscroll::-webkit-scrollbar {
+  height: 0px;
+}
+
+.anki-hscroll--hover:hover {
+  scrollbar-width: thin;
+}
+
+.anki-hscroll--hover:hover::-webkit-scrollbar {
+  height: 6px;
+}
+
+.anki-hscroll--hover:hover::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+}
+
+.anki-hscroll--hover:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+
+/* Add these overrides to your index.css */
+
+[data-sonner-toast][data-type='success'] [data-icon] {
+  color: #10b981 !important; /* emerald-500/600 */
+}
+
+[data-sonner-toast][data-type='info'] [data-icon] {
+  color: #3b82f6 !important; /* blue-500/600 */
+}
+
+/* Optional: Make the text match the icon for "Rich" effect */
+[data-sonner-toast][data-type='success'] {
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+[data-sonner-toast][data-type='info'] {
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
