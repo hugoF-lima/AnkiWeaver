@@ -166,3 +166,41 @@ class TestSettingsProfiles(unittest.TestCase):
         self.assertTrue(out.get("ok"))
         self.assertEqual(out.get("status"), 200)
         self.assertTrue(get_mock.called)
+
+    def test_migrate_legacy_store_converts_legacy_mappings(self):
+        # legacy store format: dict of modelName -> list(mapping entries)
+        legacy = {
+            "ModelA": [
+                {"anki_field": "Expression", "internal_field": "expression", "active": True}
+            ],
+            "ModelB": [],
+        }
+
+        out = main._migrate_legacy_store(legacy)
+        # Should create a default profile wrapping the legacy mappings
+        self.assertIn("profiles", out)
+        profiles = out.get("profiles") or {}
+        self.assertIn("default", profiles)
+        default = profiles.get("default") or {}
+        self.assertIn("mappings", default)
+        self.assertEqual(default.get("mappings"), legacy)
+
+    def test_to_project_relative_path_inside_and_outside_project(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td) / "projroot"
+            fake_root.mkdir()
+
+            inside = fake_root / "backend" / "data" / "db.sqlite"
+            inside.parent.mkdir(parents=True, exist_ok=True)
+            inside.write_text("x", encoding="utf-8")
+
+            outside = Path(td) / "external" / "other.sqlite"
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            outside.write_text("y", encoding="utf-8")
+
+            with patch.object(main, "PROJECT_ROOT", fake_root):
+                rel = main._to_project_relative_path(inside)
+                self.assertEqual(rel, inside.resolve().relative_to(fake_root).as_posix())
+
+                abs_path = main._to_project_relative_path(outside)
+                self.assertEqual(abs_path, str(outside.resolve()))
