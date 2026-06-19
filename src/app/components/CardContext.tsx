@@ -62,6 +62,13 @@ const PRIMARY_FIELDS = new Set([
 export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
   ({ fields, isActive, noteId, word, mapping, settingsEpoch = 0, onActivate, onUpdateField, onUpdateCard }, ref) => {
     const { t } = useTranslation();
+    useEffect(() => {
+      // debug: log when CardContext receives new selection
+      try {
+        // eslint-disable-next-line no-console
+        console.log('CardContext props', { noteId, word, fieldsLength: (fields || []).length, isActive });
+      } catch {}
+    }, [noteId, word, fields, isActive]);
     const [showMore, setShowMore] = useState(false);
     
     // State to manage whether the API or manual deep link should be used
@@ -434,7 +441,7 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
       const options = [];
       // Only include fields that are both present in the card AND active in mapping
       if (sentence) options.push({ id: sentence.label, label: 'Sentence Text', exists: hasSentence });
-      if (audio) options.push({ id: audio.label, label: 'Audio', exists: hasAudio });
+      if (audio) options.push({ id: audio.label, label: 'Sentence Audio', exists: hasAudio });
       if (translation) options.push({ id: translation.label, label: 'Translation', exists: hasTranslation });
       return options.filter((option) => option.exists);
     }, [hasSentence, hasTranslation, hasAudio, sentence, audio, translation]);

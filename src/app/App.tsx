@@ -178,6 +178,7 @@ export default function App() {
   const { cards, totalCards, loading, error, language, mapping, refresh, setCards } = useAnkiDeck(selectedDeckName, currentPage, sort, filters, cardsPerPage);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null);
+  const [explicitCard, setExplicitCard] = useState<Card | null>(null);
   const [activeBox, setActiveBox] = useState<'card' | 'examples' | null>(null);
   const CardContextScrollRef = useRef<HTMLDivElement>(null);
   const examplesScrollRef = useRef<HTMLDivElement>(null);
@@ -214,11 +215,81 @@ export default function App() {
 
   const currentCards = cards;
   const currentCard = useMemo(() => {
+    if (explicitCard) return explicitCard;
     if (selectedNoteId != null) {
-      return cards.find(c => c.noteId === selectedNoteId) ?? null;
+      const found = cards.find(c => c.noteId === selectedNoteId) ?? null;
+      // eslint-disable-next-line no-console
+      console.log('App.currentCard lookup', { selectedNoteId, found: !!found, pageCards: cards.length });
+      return found;
     }
-    return currentCards[selectedIndex] ?? null;
-  }, [cards, currentCards, selectedIndex, selectedNoteId]);
+    const fallback = currentCards[selectedIndex] ?? null;
+    // eslint-disable-next-line no-console
+    console.log('App.currentCard fallback', { selectedIndex, hasFallback: !!fallback });
+    return fallback;
+  }, [cards, currentCards, selectedIndex, selectedNoteId, explicitCard]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchSingleNote(id: number) {
+      try {
+        // eslint-disable-next-line no-console
+        console.log('App.fetchSingleNote start', id);
+        const res = await fetch(`/api/notes/${encodeURIComponent(String(id))}`);
+        // eslint-disable-next-line no-console
+        console.log('App.fetchSingleNote response status', res.status);
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const data = await res.json();
+        // eslint-disable-next-line no-console
+        console.log('App.fetchSingleNote response data', data);
+        const note = data?.note ?? data;
+        const noteFields: any = note.fields || {};
+        const fields: Card['fields'] = Object.entries(noteFields).map(([label, v]: any) => ({
+          label,
+          value: (v && (v.value ?? v)) || ''
+        }));
+        // Prefer mapping returned by the single-note endpoint when available
+        const responseMapping = data?.mapping ?? mapping;
+        const expressionField = responseMapping?.expression;
+        let expr = '';
+        if (expressionField) {
+          expr = fields.find(f => f.label === expressionField)?.value ?? '';
+        } else {
+          expr = fields.find(f => /Expression|Word|Kanji/i.test(f.label))?.value ?? fields[0]?.value ?? '';
+        }
+
+        const card: Card = {
+          word: expr,
+          fields,
+          examples: note.examples ?? [],
+          noteId: note.noteId ?? note.id
+        };
+
+        // eslint-disable-next-line no-console
+        console.log('App.fetchSingleNote built card', { noteId: card.noteId, word: card.word });
+        if (!cancelled) setExplicitCard(card);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to fetch single note', err);
+        if (!cancelled) setExplicitCard(null);
+      }
+    }
+
+    if (selectedNoteId == null) {
+      setExplicitCard(null);
+      return;
+    }
+
+    const found = cards.find(c => c.noteId === selectedNoteId);
+    if (found) {
+      setExplicitCard(null);
+      return;
+    }
+
+    void fetchSingleNote(selectedNoteId);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNoteId, cards, mapping]);
 
   useEffect(() => {
     if (loading) return;
@@ -443,6 +514,9 @@ export default function App() {
               totalCards={totalCards}
               onRefreshCards={refresh}
               onSelectNoteId={(noteId) => {
+                // debug: log selected noteId from WordGrid (mobile)
+                // eslint-disable-next-line no-console
+                console.log('App.onSelectNoteId (mobile) received', noteId);
                 setSelectedNoteId(noteId);
                 setIsDrawerOpen(true);
               }}
@@ -527,6 +601,9 @@ export default function App() {
                   totalCards={totalCards}
                   onRefreshCards={refresh}
                   onSelectNoteId={(noteId) => {
+                    // debug: log selected noteId from WordGrid (desktop)
+                    // eslint-disable-next-line no-console
+                    console.log('App.onSelectNoteId (desktop) received', noteId);
                     setSelectedNoteId(noteId);
                   }}
                   onNext={handleNext}

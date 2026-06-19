@@ -331,7 +331,8 @@ def validate_key(req: ValidateKeyRequest):
                 region = "brazilsouth"
             endpoint = f"https://{region}.api.cognitive.microsoft.com"
         url = f"{endpoint.rstrip('/')}/sts/v1.0/issueToken"
-        r = requests.post(url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=10)
+        # Use a shorter connect/read timeout tuple to avoid long blocking waits
+        r = requests.post(url, headers={"Ocp-Apim-Subscription-Key": key}, timeout=(3, 5))
         return {"ok": r.status_code == 200, "status": r.status_code, "endpoint": endpoint}
 
     if provider == "DEEPL":
@@ -829,6 +830,31 @@ def get_notes(deck: str, limit: int = 50, offset: int = 0, sort: str = "most_rec
             "total": total_count,
             "mapping": mapping # Send mapping to frontend
         }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notes/{note_id}")
+def get_note(note_id: int):
+    try:
+        logger.info("API: get_note called for %s", note_id)
+        notes_info = anki.invoke("notesInfo", {"notes": [note_id]})
+        if not notes_info:
+            raise HTTPException(status_code=404, detail="note not found")
+
+        note = notes_info[0]
+        model_name = note.get("modelName")
+        mapping = _get_profile_mapping(model_name)
+        if not mapping:
+            note_fields = note.get("fields") or {}
+            field_names = list(note_fields.keys()) if isinstance(note_fields, dict) else []
+            mapping = _infer_mapping_from_note_fields(field_names)
+
+        logger.info("API: get_note returning note %s (model=%s)", note.get('noteId'), model_name)
+        return {"note": note, "mapping": mapping}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1904,15 +1930,26 @@ def cards_import_add(request: AddImportedCardsRequest):
             lowered = base.lower()
             if lowered in {"undefined", "null", "none"}:
                 return None
+
+            # If provided as a [sound:...] tag, extract the inner filename/id
             if base.startswith("[sound:"):
-                return base
+                inner = base[len("[sound:") :]
+                if inner.endswith("]"):
+                    inner = inner[:-1]
+                base = inner.strip()
+
+            # If it already includes the tatoeba_ prefix, strip it
             if base.startswith("tatoeba_"):
                 base = base[len("tatoeba_") :]
+
+            # Remove .mp3 suffix if present
             if base.lower().endswith(".mp3"):
                 base = base[:-4]
+
             base = base.strip()
             if not base.isdigit():
                 return None
+
             filename = f"tatoeba_{base}.mp3"
             try:
                 anki.invoke(
@@ -2165,13 +2202,29 @@ def update_note_endpoint(note_id: int, payload: UpdatePayload):
         ):
             raise HTTPException(status_code=400, detail="No fields to update")
 
+        # Detect if sentence_audio is actually a Tatoeba audio id (numeric or tatoeba_xxx)
+        audio_id_param = None
+        sentence_audio_for_update = payload.sentence_audio
+        if payload.sentence_audio:
+            raw = str(payload.sentence_audio or "").strip()
+            # ignore explicit [sound:...] tags
+            if raw and not raw.startswith("[sound:"):
+                # patterns: numeric ("12345"), numeric.mp3 ("12345.mp3"), or tatoeba_12345(.mp3)
+                import re
+
+                if re.fullmatch(r"\d+", raw) or re.fullmatch(r"\d+\.mp3", raw) or re.fullmatch(r"tatoeba_\d+", raw) or re.fullmatch(r"tatoeba_\d+\.mp3", raw):
+                    audio_id_param = raw
+                    # clear sentence_audio so `anki.update_note` will handle storing the Tatoeba media
+                    sentence_audio_for_update = None
+
         anki.update_note(
             note_id,
             jp=payload.jp,
             en=payload.en,
             glossary=payload.glossary,
-            sentence_audio=payload.sentence_audio,
+            sentence_audio=sentence_audio_for_update,
             expression_audio=payload.expression_audio,
+            audio_id=audio_id_param,
             mapping=mapping,
         )
         logger.info("Note update completed note_id=%s", note_id)
@@ -2210,11 +2263,30 @@ def clear_sentence_fields(note_id: int, request: ClearFieldsRequest):
         if not note_info or not note_info[0]:
             raise HTTPException(status_code=404, detail="Note not found in Anki")
             
-        existing_fields = note_info[0].get("fields", {}).keys()
-        
-        # 2. Only attempt to clear fields that actually exist in this Note Type
-        valid_fields = [f for f in request.fields if f in existing_fields]
-        
+        existing_fields = list(note_info[0].get("fields", {}).keys())
+
+        # Build a normalization map for robust matching (handles spaces/underscores/casing)
+        def _normalize(name: str) -> str:
+            import re
+            return re.sub(r"[^0-9a-z]", "", (name or "").lower())
+
+        normalized_to_actual = { _normalize(name): name for name in existing_fields }
+
+        # 2. Match requested fields against existing fields using normalization
+        valid_fields = []
+        for f in (request.fields or []):
+            if not f:
+                continue
+            # direct exact match first
+            if f in existing_fields:
+                valid_fields.append(f)
+                continue
+            # normalized match
+            norm = _normalize(f)
+            matched = normalized_to_actual.get(norm)
+            if matched:
+                valid_fields.append(matched)
+
         if not valid_fields:
             return {"ok": True, "message": "No valid fields found to clear"}
 

@@ -390,6 +390,7 @@ export default function SettingsDialog({
   const [profileLoadMessageVisible, setProfileLoadMessageVisible] = useState(false);
   const deeplValidationTimeoutRef = useRef<number | null>(null);
   const elevenValidationTimeoutRef = useRef<number | null>(null);
+  const azureValidationTimeoutRef = useRef<number | null>(null);
   const profileLoadFadeTimeoutRef = useRef<number | null>(null);
   const profileLoadClearTimeoutRef = useRef<number | null>(null);
 
@@ -727,6 +728,34 @@ export default function SettingsDialog({
       }
     };
   }, [open, activeTab, deeplKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeTab !== "API Keys") return;
+
+    if (azureValidationTimeoutRef.current != null) {
+      window.clearTimeout(azureValidationTimeoutRef.current);
+      azureValidationTimeoutRef.current = null;
+    }
+
+    const trimmed = azureKey.trim();
+    if (!trimmed) {
+      setCheckState((s) => ({ ...s, AZURE: "idle" }));
+      return;
+    }
+
+    azureValidationTimeoutRef.current = window.setTimeout(() => {
+      azureValidationTimeoutRef.current = null;
+      void runValidation("AZURE", trimmed);
+    }, 700);
+
+    return () => {
+      if (azureValidationTimeoutRef.current != null) {
+        window.clearTimeout(azureValidationTimeoutRef.current);
+        azureValidationTimeoutRef.current = null;
+      }
+    };
+  }, [open, activeTab, azureKey]);
 
   useEffect(() => {
     if (!open) return;

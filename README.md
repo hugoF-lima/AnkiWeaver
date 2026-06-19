@@ -30,7 +30,9 @@ If you came looking for the unit test reports, they are present on backend/unit_
 
   Run `npm run dev` to start the development server.
   
+  Make sure python dependencies are installed, and backend is running:
 
+  'cd backend'
   ```bash
     python -m uvicorn backend.main:app --reload --port 8000
   ```

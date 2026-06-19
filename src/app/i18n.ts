@@ -280,6 +280,7 @@ const ptBR: Record<string, string> = {
   "settings.profileDeletedDescription": "{{profileName}} foi excluído.",
   "settings.azureApiKeyHelp": "Ajuda da chave de API do Azure",
   "settings.azureApiKeyHelpText": "Você precisa de uma chave de API do Azure para usar modelos de TTS do Azure. Saiba como obter uma",
+  here: "aqui",
   "settings.deeplApiKeyHelp": "Ajuda da chave de API do DeepL",
   "settings.elevenlabsApiKeyHelp": "Ajuda da chave de API do ElevenLabs",
   "settings.elevenlabsApiKeyHelpText": "Você precisa de uma chave de API do ElevenLabs para usar modelos de TTS do ElevenLabs. Saiba como obter uma",

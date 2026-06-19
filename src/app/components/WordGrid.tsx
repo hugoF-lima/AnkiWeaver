@@ -259,12 +259,16 @@ const handleSelectById = (index: number, noteId?: number) => {
   const [searchQuery, setSearchQuery] = useState("");
   const searchActive = !!searchQuery.trim();
 
+  // When searching we prefer to search the full deck (not just the currently fetched page)
+  const [allInternalCards, setAllInternalCards] = useState<Card[] | null>(null);
+  const MAX_SEARCH_FETCH = 5000; // safety cap to avoid huge fetches
+
   const filteredCards = useMemo(() => {
-    if (!searchActive) return cards;
-    return cards.filter((card) =>
-      card.word.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [cards, searchActive, searchQuery]);
+    // Use the full-deck cache when available during a search, regardless of internalMode
+    const pool = (searchActive && allInternalCards) ? allInternalCards : cards;
+    if (!searchActive) return pool;
+    return (pool || []).filter((card) => card.word.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [cards, allInternalCards, searchActive, searchQuery]);
 
   // 2. Pagination: when searching, always page over the full filteredCards list
   const totalPages = useMemo(() => {
@@ -286,11 +290,13 @@ const handleSelectById = (index: number, noteId?: number) => {
   
   const cardByWord = useMemo(() => {
     const map = new Map<string, Card>();
-    cards.forEach(card => {
+    // Use the same pool as filteredCards: when searching, prefer the full-deck cache
+    const pool = (searchActive && allInternalCards) ? allInternalCards ?? [] : cards ?? [];
+    for (const card of pool) {
       map.set(card.word, card);
-    });
+    }
     return map;
-  }, [cards]);
+  }, [cards, allInternalCards, searchActive]);
 
   const [bulkSelectedKeys, setBulkSelectedKeys] = useState<Set<string>>(new Set());
   const [bulkSelectedNoteIds, setBulkSelectedNoteIds] = useState<Set<number>>(new Set());
@@ -379,9 +385,10 @@ const handleSelectById = (index: number, noteId?: number) => {
   const bulkTableRef = useRef<HTMLDivElement | null>(null);
   const bulkMediaAudioRef = useRef<HTMLAudioElement | null>(null);
   const bulkMediaLoadingIntervalRef = useRef<number | null>(null);
+  const bulkMediaLoadingHideTimeoutRef = useRef<number | null>(null);
   const [bulkFailedAudioFilenames, setBulkFailedAudioFilenames] = useState<Set<string>>(() => new Set());
   const [bulkLoadingAudioFilename, setBulkLoadingAudioFilename] = useState<string | null>(null);
-  const [bulkLoadingAudioSeconds, setBulkLoadingAudioSeconds] = useState(1);
+  const [bulkLoadingAudioPercent, setBulkLoadingAudioPercent] = useState(0);
   const [bulkActiveNoteId, setBulkActiveNoteId] = useState<number | null>(null);
   const bulkRowElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const bulkCardCacheRef = useRef<Map<number, Card>>(new Map());
@@ -394,10 +401,61 @@ const handleSelectById = (index: number, noteId?: number) => {
   const [bulkDeckTotal, setBulkDeckTotal] = useState<number | null>(null);
   const [bulkDeckOffset, setBulkDeckOffset] = useState(0);
 
+  // Fetch full deck when user begins searching in internal mode and we don't yet have all cards
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      console.log('full-deck-fetch effect start', { internalMode, searchActive, allInternalCards, deckName, totalDeckCards });
+      // Run when a search is active and we have a deckName to query.
+      if (!searchActive) {
+        if (allInternalCards) setAllInternalCards(null);
+        return;
+      }
+      if (!deckName) {
+        // No deck to query against
+        return;
+      }
+      if (allInternalCards) return; // already fetched
+      const total = Number(totalDeckCards || 0);
+      if (!deckName) return;
+      // determine fetch limit: use reported total when available, otherwise fetch up to cap
+      const limit = total > 0 ? Math.min(total, MAX_SEARCH_FETCH) : MAX_SEARCH_FETCH;
+
+      try {
+        const url = `/api/notes?deck=${encodeURIComponent(String(deckName))}&limit=${limit}&offset=0&sort=${encodeURIComponent(String(sort))}`;
+        const res = await fetch(url);
+        console.log("Is this?", res);
+        if (!res.ok) throw new Error(`Failed fetching full deck: ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+
+        const activeMapping = (data.mapping !== undefined ? (data.mapping || {}) : {});
+        const mapped = (data.notes || []).map((note: any) => {
+          const fields: any[] = Object.entries(note.fields ?? {}).map(([label, v]: any) => ({ label, value: (v && (v.value ?? v)) || '' }));
+          const expressionField = activeMapping.expression;
+          let expr = '';
+          if (expressionField) {
+            expr = fields.find((f: any) => f.label === expressionField)?.value ?? '';
+          } else {
+            expr = fields.find((f: any) => /Expression|Word|Kanji/i.test(f.label))?.value ?? fields[0]?.value ?? '';
+          }
+          return { word: expr, fields, examples: [], noteId: note.noteId ?? note.id } as Card;
+        });
+        setAllInternalCards(mapped);
+      } catch (err) {
+        console.error('Failed to fetch full deck for search', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [internalMode, searchActive, allInternalCards, deckName, totalDeckCards, cardsPerPage, sort]);
+
   useEffect(() => {
     return () => {
       if (bulkMediaLoadingIntervalRef.current != null) {
         window.clearInterval(bulkMediaLoadingIntervalRef.current);
+      }
+      if (bulkMediaLoadingHideTimeoutRef.current != null) {
+        window.clearTimeout(bulkMediaLoadingHideTimeoutRef.current);
       }
       if (bulkMediaAudioRef.current) {
         bulkMediaAudioRef.current.pause();
@@ -2586,13 +2644,14 @@ const handleSelectById = (index: number, noteId?: number) => {
   const startBulkAudioLoading = useCallback((filename: string) => {
     if (bulkMediaLoadingIntervalRef.current != null) {
       window.clearInterval(bulkMediaLoadingIntervalRef.current);
+      bulkMediaLoadingIntervalRef.current = null;
+    }
+    if (bulkMediaLoadingHideTimeoutRef.current != null) {
+      window.clearTimeout(bulkMediaLoadingHideTimeoutRef.current);
+      bulkMediaLoadingHideTimeoutRef.current = null;
     }
     setBulkLoadingAudioFilename(filename);
-    setBulkLoadingAudioSeconds(1);
-    const startedAt = Date.now();
-    bulkMediaLoadingIntervalRef.current = window.setInterval(() => {
-      setBulkLoadingAudioSeconds(Math.max(1, Math.ceil((Date.now() - startedAt) / 1000)));
-    }, 250);
+    setBulkLoadingAudioPercent(0);
   }, []);
 
   const stopBulkAudioLoading = useCallback((filename?: string) => {
@@ -2601,8 +2660,16 @@ const handleSelectById = (index: number, noteId?: number) => {
       window.clearInterval(bulkMediaLoadingIntervalRef.current);
       bulkMediaLoadingIntervalRef.current = null;
     }
-    setBulkLoadingAudioFilename((prev) => (filename && prev !== filename ? prev : null));
-    setBulkLoadingAudioSeconds(1);
+    // hide after a short delay so UI has time to show 100%
+    if (bulkMediaLoadingHideTimeoutRef.current != null) {
+      window.clearTimeout(bulkMediaLoadingHideTimeoutRef.current);
+      bulkMediaLoadingHideTimeoutRef.current = null;
+    }
+    bulkMediaLoadingHideTimeoutRef.current = window.setTimeout(() => {
+      setBulkLoadingAudioFilename((prev) => (filename && prev !== filename ? prev : null));
+      setBulkLoadingAudioPercent(0);
+      bulkMediaLoadingHideTimeoutRef.current = null;
+    }, 600);
   }, [bulkLoadingAudioFilename]);
 
   const playBulkMediaFile = useCallback((filename: string) => {
@@ -2613,19 +2680,49 @@ const handleSelectById = (index: number, noteId?: number) => {
       }
       const a = new Audio(`/media/${encodeURIComponent(filename)}`);
       startBulkAudioLoading(filename);
-      const handleReady = () => {
-        stopBulkAudioLoading(filename);
+
+      const updateProgress = () => {
+        try {
+          if (!Number.isFinite(a.duration) || a.duration <= 0 || a.buffered.length === 0) return;
+          const bufferedEnd = a.buffered.end(a.buffered.length - 1);
+          const ratio = Math.max(0, Math.min(1, bufferedEnd / a.duration));
+          const nextPercent = Math.min(99, Math.max(5, Math.round(ratio * 100)));
+          setBulkLoadingAudioPercent((prev) => Math.max(prev, nextPercent));
+        } catch {
+          // ignore
+        }
       };
-      a.addEventListener('error', () => {
+
+      const handleReady = () => {
+        completeBulkLoad();
+        cleanupListeners();
+      };
+
+      const handleError = () => {
         stopBulkAudioLoading(filename);
-        setBulkFailedAudioFilenames((prev) => {
-          const next = new Set(prev);
-          next.add(filename);
-          return next;
-        });
-      });
+        cleanupListeners();
+      };
+
+      const cleanupListeners = () => {
+        a.removeEventListener('loadedmetadata', updateProgress);
+        a.removeEventListener('progress', updateProgress);
+        a.removeEventListener('canplaythrough', updateProgress);
+        a.removeEventListener('canplay', handleReady);
+        a.removeEventListener('playing', handleReady);
+        a.removeEventListener('error', handleError);
+      };
+
+      const completeBulkLoad = () => {
+        setBulkLoadingAudioPercent(100);
+      };
+
+      a.addEventListener('loadedmetadata', updateProgress);
+      a.addEventListener('progress', updateProgress);
+      a.addEventListener('canplaythrough', updateProgress);
       a.addEventListener('canplay', handleReady, { once: true });
       a.addEventListener('playing', handleReady, { once: true });
+      a.addEventListener('error', handleError, { once: true });
+
       bulkMediaAudioRef.current = a;
       void a.play()
         .then(() => {
@@ -2680,6 +2777,15 @@ const handleSelectById = (index: number, noteId?: number) => {
     }
     const key = getSelectionKey(word, index, noteId);
     const toggle = e.ctrlKey || e.metaKey || bulkSelectedKeys.size > 1;
+
+    // Debug: log click events and relevant identifiers
+    try {
+      // eslint-disable-next-line no-console
+      console.log('WordGrid.handleGridClick', { index, word, noteId, key, toggle, selectedNoteId });
+    } catch (err) {
+      // ignore
+      console.log('Empty?');
+    }
 
     if (toggle) {
       toggleBulkSelection(key, noteId);
@@ -7332,7 +7438,7 @@ const handleSelectById = (index: number, noteId?: number) => {
                                 )}
                                 {bulkLoadingAudioFilename === expressionSound ? (
                                   <span className="absolute -right-1 -top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-slate-950">
-                                    {bulkLoadingAudioSeconds}
+                                    {bulkLoadingAudioPercent}%
                                   </span>
                                 ) : null}
                               </button>
@@ -7417,7 +7523,7 @@ const handleSelectById = (index: number, noteId?: number) => {
                                     )}
                                     {bulkLoadingAudioFilename === sentenceSound ? (
                                       <span className="absolute -right-1 -top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-slate-950">
-                                        {bulkLoadingAudioSeconds}
+                                        {bulkLoadingAudioPercent}%
                                       </span>
                                     ) : null}
                                   </button>
