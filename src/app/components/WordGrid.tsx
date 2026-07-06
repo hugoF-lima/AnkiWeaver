@@ -669,6 +669,7 @@ const handleSelectById = (index: number, noteId?: number) => {
   const bulkVisibleRows = useMemo(() => {
     if (bulkEffectiveFilters.length === 0) return bulkRandomRows;
     return bulkRandomRows.filter((r) => {
+      if (r.status === 'updated' || r.status === 'failed') return true;
       const cleanedGlossary = String(r.glossary ?? '')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]*>/g, '')
@@ -740,7 +741,7 @@ const handleSelectById = (index: number, noteId?: number) => {
     let glossary = 0;
     let entryAudio = 0;
     for (const r of bulkDisplayRows) {
-      if (!r.include) continue;
+      if (!(r.include || r.status === 'updated' || r.status === 'failed')) continue;
       if (showSentenceField && !String(r.sentence || '').trim()) sentence += 1;
       if (showTranslationField && !String(r.translation || '').trim()) translation += 1;
       if (showSentenceAudioField && !r.sentenceHasAudio) sentenceAudio += 1;
@@ -811,7 +812,8 @@ const handleSelectById = (index: number, noteId?: number) => {
   const bulkAllFilteredIncluded = useMemo(() => {
     if (bulkDisplayRows.length === 0) return false;
     for (const r of bulkDisplayRows) {
-      if (!r.include) return false;
+      const isActionable = r.include || r.status === 'updated' || r.status === 'failed';
+      if (!isActionable) return false;
     }
     return true;
   }, [bulkDisplayRows]);
@@ -833,16 +835,53 @@ const handleSelectById = (index: number, noteId?: number) => {
     });
   }, [bulkSelectAllFiltered, bulkDisplayRows]);
 
+  const noteIdToCard = useMemo(() => {
+    const map = new Map<number, Card>();
+    cards.forEach((c) => {
+      if (c.noteId != null) map.set(c.noteId, c);
+    });
+    for (const [nid, c] of bulkCardCacheRef.current.entries()) {
+      if (!map.has(nid)) map.set(nid, c);
+    }
+    return map;
+  }, [cards, bulkCardCacheEpoch]);
+
+  const isBulkRowPendingWrite = useCallback(
+    (row: (typeof bulkRandomRows)[number], card?: Card) => {
+      if (row.status === 'failed') return true;
+      if (row.include) return true;
+      if (row.sentenceAudioFilename || row.expressionAudioFilename) return true;
+
+      if (!card) return false;
+
+      const sentenceField = mapping?.sentence ?? 'Sentence';
+      const translationField = mapping?.translation ?? 'SentenceTranslation';
+      const glossaryField = mapping?.glossary ?? 'Glossary';
+
+      const currentSentence = cleanSentenceFieldText(card.fields.find((f) => f.label === sentenceField)?.value ?? '');
+      const currentTranslation = cleanSentenceFieldText(card.fields.find((f) => f.label === translationField)?.value ?? '');
+      const currentGlossary = cleanGlossaryFieldText(card.fields.find((f) => f.label === glossaryField)?.value ?? '');
+      const rowGlossary = cleanGlossaryFieldText(row.glossary ?? '');
+
+      return (
+        String(row.sentence || '').trim() !== currentSentence ||
+        String(row.translation || '').trim() !== currentTranslation ||
+        rowGlossary !== currentGlossary
+      );
+    },
+    [mapping]
+  );
+
   const bulkIncludedCount = useMemo(() => {
-    return bulkDisplayRows.filter((r) => r.include).length;
-  }, [bulkDisplayRows]);
+    return bulkDisplayRows.filter((r) => isBulkRowPendingWrite(r, noteIdToCard.get(r.noteId))).length;
+  }, [bulkDisplayRows, isBulkRowPendingWrite, noteIdToCard]);
 
   const bulkIncludedEligibleForTtsCount = useMemo(() => {
     if (bulkActionTab !== 'tts') return bulkDisplayRows.filter((r) => r.include && r.sentence.trim()).length;
 
     const canExpressionAudio = !mapping || Boolean(mapping['expression_audio']);
     return bulkDisplayRows.filter((r) => {
-      if (!r.include) return false;
+      if (!(r.include || r.status === 'updated' || r.status === 'failed')) return false;
       const needsSentence = r.sentence.trim() && !r.sentenceHasAudio;
       const needsExpression =
         canExpressionAudio && bulkTtsIncludeExpressionAudio && r.expression.trim() && !r.expressionHasAudio;
@@ -938,45 +977,17 @@ const handleSelectById = (index: number, noteId?: number) => {
     };
   }, [bulkAddMissingOpen, settingsEpoch]);
 
-  const noteIdToCard = useMemo(() => {
-    const map = new Map<number, Card>();
-    cards.forEach((c) => {
-      if (c.noteId != null) map.set(c.noteId, c);
-    });
-    for (const [nid, c] of bulkCardCacheRef.current.entries()) {
-      if (!map.has(nid)) map.set(nid, c);
-    }
-    return map;
-  }, [cards, bulkCardCacheEpoch]);
-
   const bulkPendingWriteCount = useMemo(() => {
-    const sentenceField = mapping?.sentence ?? 'Sentence';
-    const translationField = mapping?.translation ?? 'SentenceTranslation';
-    const glossaryField = mapping?.glossary ?? 'Glossary';
-
     let count = 0;
     for (const row of bulkRandomRows) {
-      if (!row.include) continue;
-      if (row.sentenceAudioFilename || row.expressionAudioFilename) {
-        count += 1;
-        continue;
-      }
       const card = noteIdToCard.get(row.noteId);
-      if (!card) continue;
-
-      const currentSentence = cleanSentenceFieldText(card.fields.find((f) => f.label === sentenceField)?.value ?? '');
-      const currentTranslation = cleanSentenceFieldText(card.fields.find((f) => f.label === translationField)?.value ?? '');
-      const currentGlossary = cleanGlossaryFieldText(card.fields.find((f) => f.label === glossaryField)?.value ?? '');
-      const rowGlossary = cleanGlossaryFieldText(row.glossary ?? '');
-
-      if (String(row.sentence || '').trim() !== currentSentence) count += 1;
-      else if (String(row.translation || '').trim() !== currentTranslation) count += 1;
-      else if (rowGlossary !== currentGlossary) count += 1;
+      if (isBulkRowPendingWrite(row, card)) count += 1;
     }
     return count;
-  }, [bulkRandomRows, mapping, noteIdToCard]);
+  }, [bulkRandomRows, isBulkRowPendingWrite, noteIdToCard]);
 
   const bulkControlsLocked = bulkRunning || bulkHasPreviewChanges || bulkTableOverrideNoteIds != null;
+  const bulkHasPendingWriteChanges = bulkHasPreviewChanges || bulkPendingWriteCount > 0;
 
   useEffect(() => {
     if (!bulkAddMissingOpen) return;
@@ -1293,13 +1304,28 @@ const handleSelectById = (index: number, noteId?: number) => {
     if (!bulkEnhancementsSelected) return;
     if (bulkEnhancementsBlocked) return;
 
-    const ids = bulkVisibleRows.filter((r) => r.include).map((r) => r.noteId);
+    const ids = bulkVisibleRows.filter((r) => r.include || r.status === 'updated' || r.status === 'failed').map((r) => r.noteId);
     if (ids.length === 0) {
       toast.info('No rows included.');
       return;
     }
 
-    setBulkTableOverrideNoteIds([]);
+    setBulkRandomRows((prev) =>
+      prev.map((row) => (ids.includes(row.noteId) ? { ...row, include: true } : row))
+    );
+
+    // console.log('[bulk] apply start', {
+    //   ids,
+    //   bulkVisibleRows: bulkVisibleRows.map((r) => ({ noteId: r.noteId, include: r.include, sentence: r.sentence, translation: r.translation, glossary: r.glossary, sentenceHasAudio: r.sentenceHasAudio, expressionHasAudio: r.expressionHasAudio })),
+    //   filters,
+    //   bulkEnhanceAddSentence,
+    //   bulkEnhanceAddSentenceTranslation,
+    //   bulkEnhanceAddSentenceAudio,
+    //   bulkEnhanceAddTranslation,
+    //   bulkEnhanceAddAudio,
+    //   mapping,
+    // });
+    setBulkTableOverrideNoteIds(null);
     setBulkPreviewRecentlyUpdatedNoteIds([]);
     setBulkHasPreviewChanges(false);
     bulkSavedFiltersRef.current = [...filters];
@@ -1320,6 +1346,7 @@ const handleSelectById = (index: number, noteId?: number) => {
       let failed = 0;
       let done = 0;
       const updatedNoteIds: number[] = [];
+      const previewChangedNoteIds = new Set<number>();
       const sentenceToTatoebaAudioCache = new Map<string, string | null>();
 
       for (const noteId of ids) {
@@ -1531,6 +1558,7 @@ const handleSelectById = (index: number, noteId?: number) => {
           if (previewUpdated) {
             updated += 1;
             updatedNoteIds.push(noteId);
+            previewChangedNoteIds.add(noteId);
             setBulkTableOverrideNoteIds((prev) => {
               const base = Array.isArray(prev) ? prev : [];
               if (base.includes(noteId)) return prev;
@@ -1583,9 +1611,17 @@ const handleSelectById = (index: number, noteId?: number) => {
         }
       }
 
+      // console.log('[bulk] apply summary', {
+      //   updated,
+      //   skipped,
+      //   failed,
+      //   updatedNoteIds,
+      //   previewChangedNoteIds: Array.from(previewChangedNoteIds),
+      //   bulkHasPreviewChanges: previewChangedNoteIds.size > 0,
+      // });
       toast.success(`Preview: ${updated} updated, ${skipped} skipped, ${failed} failed.`);
       setBulkPreviewRecentlyUpdatedNoteIds(updatedNoteIds);
-      setBulkHasPreviewChanges(updatedNoteIds.length > 0);
+      setBulkHasPreviewChanges(previewChangedNoteIds.size > 0);
       setBulkEnhanceConfirmOpen(false);
     } catch (err: any) {
       toast.error(`Bulk enhancements failed: ${err?.message ?? String(err)}`);
@@ -1632,6 +1668,13 @@ const handleSelectById = (index: number, noteId?: number) => {
 
     const ids = bulkVisibleRows.filter((r) => r.include).map((r) => r.noteId);
     if (ids.length === 0) return;
+
+    // console.log('[bulk] write start', {
+    //   ids,
+    //   bulkVisibleRows: bulkVisibleRows.map((r) => ({ noteId: r.noteId, include: r.include, sentence: r.sentence, translation: r.translation, glossary: r.glossary, sentenceAudioFilename: r.sentenceAudioFilename, expressionAudioFilename: r.expressionAudioFilename, sentenceHasAudio: r.sentenceHasAudio, expressionHasAudio: r.expressionHasAudio })),
+    //   bulkRandomRows: bulkRandomRows.map((r) => ({ noteId: r.noteId, include: r.include, sentence: r.sentence, translation: r.translation, glossary: r.glossary, sentenceAudioFilename: r.sentenceAudioFilename, expressionAudioFilename: r.expressionAudioFilename, sentenceHasAudio: r.sentenceHasAudio, expressionHasAudio: r.expressionHasAudio })),
+    //   mapping,
+    // });
 
     const sentenceField = mapping?.sentence ?? 'Sentence';
     const translationField = mapping?.translation ?? 'SentenceTranslation';
@@ -1690,6 +1733,8 @@ const handleSelectById = (index: number, noteId?: number) => {
             if (!has || currentExpressionBroken) payload.expression_audio = row.expressionAudioFilename;
           }
 
+          // console.log('[bulk] write payload', { noteId, row, currentSentence, currentTranslation, currentGlossary, currentSentenceAudio, currentExpressionAudio, payload });
+
           if (Object.keys(payload).length === 0) {
             skipped += 1;
             setBulkRandomRows((prev) =>
@@ -1706,11 +1751,13 @@ const handleSelectById = (index: number, noteId?: number) => {
             translation: Boolean(payload.en),
           };
 
+          // console.log('[bulk] write request', { noteId, payload });
           const upd = await fetch(`/api/notes/${noteId}/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
+          // console.log('[bulk] write response', { noteId, status: upd.status, statusText: upd.statusText, body: await upd.text().catch(() => '') });
           if (!upd.ok) throw new Error(await upd.text());
 
           updated += 1;
@@ -1724,7 +1771,8 @@ const handleSelectById = (index: number, noteId?: number) => {
                     ...r,
                     sentenceAudioFilename: undefined,
                     expressionAudioFilename: undefined,
-                    status: 'updated',
+                    include: false,
+                    status: 'skipped',
                     message: t("Saved."),
                   }
                 : r
@@ -1742,6 +1790,7 @@ const handleSelectById = (index: number, noteId?: number) => {
 
       await refreshCards();
       onFiltersChange?.([]);
+      setBulkHasPreviewChanges(false);
       setBulkSelectAllFiltered(false);
       setBulkLastUpdatedNoteIds(updatedIds);
       setBulkLastUpdatedLabel(t("bulkActions.writeToAnki"));
@@ -1749,6 +1798,7 @@ const handleSelectById = (index: number, noteId?: number) => {
       setBulkRecentlyWrittenChanges(updatedChanges);
       setBulkHasPreviewChanges(false);
 
+      // console.log('[bulk] write summary', { updated, skipped, failed, updatedIds, updatedChanges });
       toast.success(`Bulk: ${updated} saved, ${skipped} skipped, ${failed} failed.`);
     } catch (err: any) {
       toast.error(`Bulk write failed: ${err?.message ?? String(err)}`);
@@ -7647,16 +7697,14 @@ const handleSelectById = (index: number, noteId?: number) => {
                 disabled={
                   bulkRunning ||
                   bulkTableOverrideNoteIds != null ||
-                  !bulkHasPreviewChanges ||
-                  bulkIncludedCount === 0 ||
+                  !bulkHasPendingWriteChanges ||
                   bulkPendingWriteCount === 0
                 }
                 data-component="bulk-write-to-anki-button"
                 className={`rounded-lg px-4 py-2 text-sm transition-colors ${
                   bulkRunning ||
                   bulkTableOverrideNoteIds != null ||
-                  !bulkHasPreviewChanges ||
-                  bulkIncludedCount === 0 ||
+                  !bulkHasPendingWriteChanges ||
                   bulkPendingWriteCount === 0
                     ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
                     : 'bg-emerald-600 text-white hover:bg-emerald-700'
@@ -7763,7 +7811,7 @@ const handleSelectById = (index: number, noteId?: number) => {
                   <AlertDialogCancel data-component="bulk-write-cancel-button" disabled={bulkRunning}>{t("Cancel")}</AlertDialogCancel>
                   <AlertDialogAction
                     data-component="bulk-write-confirm-button"
-                    disabled={bulkRunning || !bulkHasPreviewChanges || bulkIncludedCount === 0 || bulkPendingWriteCount === 0}
+                    disabled={bulkRunning || !bulkHasPendingWriteChanges || bulkPendingWriteCount === 0}
                     onClick={(e) => {
                       e.preventDefault();
                       void handleBulkWriteToAnki();

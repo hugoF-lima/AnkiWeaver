@@ -706,18 +706,72 @@ def _get_deck_expression_set(deck_name: str, mapping: Dict[str, str]) -> Set[str
     _deck_expression_cache[deck_name] = {"ts": now, "exprs": exprs}
     return exprs
 
+def _build_notes_query(deck: str, mapping: Optional[Dict[str, str]], filters: str = "") -> str:
+    query = f'deck:"{deck}"'
+    if not filters:
+        return query
+
+    filter_list = [x.strip() for x in filters.split(",") if x.strip()]
+    defaults = {
+        "sentence_audio": "SentenceAudio",
+        "expression_audio": "Audio",
+        "sentence": "Sentence",
+        "translation": "SentenceTranslation",
+    }
+
+    for f in filter_list:
+        internal_key: Optional[str] = None
+        negate_empty = False
+        audio_sound_check: Optional[bool] = None
+
+        if f == "missing_audio":
+            internal_key = "sentence_audio"
+            audio_sound_check = False
+        elif f == "missing_entry_audio":
+            internal_key = "expression_audio"
+            audio_sound_check = False
+        elif f == "missing_sentence":
+            internal_key = "sentence"
+        elif f == "missing_translation":
+            internal_key = "translation"
+        elif f == "contains_audio":
+            internal_key = "sentence_audio"
+            audio_sound_check = True
+        elif f == "contains_entry_audio":
+            internal_key = "expression_audio"
+            audio_sound_check = True
+        elif f == "contains_sentence":
+            internal_key = "sentence"
+            negate_empty = True
+        elif f == "contains_translation":
+            internal_key = "translation"
+            negate_empty = True
+
+        if not internal_key:
+            continue
+
+        anki_field = (mapping or {}).get(internal_key) if isinstance(mapping, dict) else defaults.get(internal_key)
+        if not anki_field:
+            continue
+
+        if audio_sound_check is not None:
+            sound_query = f'{anki_field}:re:\\[sound:'
+            query += f' {sound_query}' if audio_sound_check else f' -{sound_query}'
+        else:
+            if negate_empty:
+                query += f' -{anki_field}:'
+            else:
+                query += f' {anki_field}:'
+
+    return query
+
 @app.get("/api/notes")
 def get_notes(deck: str, limit: int = 50, offset: int = 0, sort: str = "most_recent", filters: str = ""):
     try:
-        # 1. Build the Anki query based on filters
-        query = f'deck:"{deck}"'
-        
-        # We need to know the mapping to apply filters correctly
-        # Get first note to find the model
         temp_ids = anki.invoke("findNotes", {"query": f'deck:"{deck}"'})
         if not temp_ids:
             return {"notes": [], "total": 0, "mapping": None}
-        
+
         first_note = anki.invoke("notesInfo", {"notes": [temp_ids[0]]})
         model_name = first_note[0].get("modelName")
         mapping = _get_profile_mapping(model_name)
@@ -725,55 +779,8 @@ def get_notes(deck: str, limit: int = 50, offset: int = 0, sort: str = "most_rec
             note_fields = first_note[0].get("fields") or {}
             field_names = list(note_fields.keys()) if isinstance(note_fields, dict) else []
             mapping = _infer_mapping_from_note_fields(field_names)
-        
-        if filters:
-            filter_list = [x.strip() for x in filters.split(",") if x.strip()]
-            defaults = {
-                "sentence_audio": "SentenceAudio",
-                "sentence": "Sentence",
-                "translation": "SentenceTranslation",
-            }
 
-            for f in filter_list:
-                internal_key: Optional[str] = None
-                negate_empty = False
-                audio_sound_check: Optional[bool] = None  # True => must contain [sound:], False => must NOT contain [sound:]
-
-                if f == "missing_audio":
-                    internal_key = "sentence_audio"
-                    audio_sound_check = False
-                elif f == "missing_sentence":
-                    internal_key = "sentence"
-                elif f == "missing_translation":
-                    internal_key = "translation"
-                elif f == "contains_audio":
-                    internal_key = "sentence_audio"
-                    audio_sound_check = True
-                elif f == "contains_sentence":
-                    internal_key = "sentence"
-                    negate_empty = True
-                elif f == "contains_translation":
-                    internal_key = "translation"
-                    negate_empty = True
-
-                if not internal_key:
-                    continue
-
-                anki_field = mapping.get(internal_key) if isinstance(mapping, dict) else defaults.get(internal_key)
-
-                if not anki_field:
-                    continue
-
-                if audio_sound_check is not None:
-                    # Use a regex check for actual Anki sound references like: [sound:filename.mp3]
-                    # This avoids mismatches where the field is non-empty but contains no sound tag.
-                    sound_query = f'{anki_field}:re:\\[sound:'
-                    query += f' "{sound_query}"' if audio_sound_check else f' -"{sound_query}"'
-                else:
-                    if negate_empty:
-                        query += f' -"{anki_field}:"'
-                    else:
-                        query += f' "{anki_field}:"'
+        query = _build_notes_query(deck, mapping, filters)
 
         # 2. Get ALL Note IDs for this deck to find the total count
         all_ids = list(anki.invoke("findNotes", {"query": query}) or [])
@@ -863,8 +870,6 @@ def get_note(note_id: int):
 @app.get("/api/note-ids")
 def get_note_ids(deck: str, limit: int = 500, offset: int = 0, sort: str = "most_recent", filters: str = ""):
     try:
-        query = f'deck:"{deck}"'
-
         temp_ids = anki.invoke("findNotes", {"query": f'deck:"{deck}"'})
         if not temp_ids:
             return {"noteIds": [], "total": 0, "mapping": None}
@@ -877,52 +882,7 @@ def get_note_ids(deck: str, limit: int = 500, offset: int = 0, sort: str = "most
             field_names = list(note_fields.keys()) if isinstance(note_fields, dict) else []
             mapping = _infer_mapping_from_note_fields(field_names)
 
-        if filters:
-            filter_list = [x.strip() for x in filters.split(",") if x.strip()]
-            defaults = {
-                "sentence_audio": "SentenceAudio",
-                "sentence": "Sentence",
-                "translation": "SentenceTranslation",
-            }
-
-            for f in filter_list:
-                internal_key: Optional[str] = None
-                negate_empty = False
-                audio_sound_check: Optional[bool] = None
-
-                if f == "missing_audio":
-                    internal_key = "sentence_audio"
-                    audio_sound_check = False
-                elif f == "missing_sentence":
-                    internal_key = "sentence"
-                elif f == "missing_translation":
-                    internal_key = "translation"
-                elif f == "contains_audio":
-                    internal_key = "sentence_audio"
-                    audio_sound_check = True
-                elif f == "contains_sentence":
-                    internal_key = "sentence"
-                    negate_empty = True
-                elif f == "contains_translation":
-                    internal_key = "translation"
-                    negate_empty = True
-
-                if not internal_key:
-                    continue
-
-                anki_field = mapping.get(internal_key) if isinstance(mapping, dict) else defaults.get(internal_key)
-                if not anki_field:
-                    continue
-
-                if audio_sound_check is not None:
-                    sound_query = f'{anki_field}:re:\\[sound:'
-                    query += f' "{sound_query}"' if audio_sound_check else f' -"{sound_query}"'
-                else:
-                    if negate_empty:
-                        query += f' -"{anki_field}:"'
-                    else:
-                        query += f' "{anki_field}:"'
-
+        query = _build_notes_query(deck, mapping, filters)
         all_ids = list(anki.invoke("findNotes", {"query": query}) or [])
 
         if sort in ["most_recent", "oldest"]:
@@ -1052,6 +1012,7 @@ class GenerateNoteAudioRequest(BaseModel):
     voiceName: Optional[str] = None
     generateSentenceAudio: bool = True
     generateExpressionAudio: bool = False
+    textOverride: Optional[str] = None
 
 class GenerateMissingAudioRequest(BaseModel):
     deckName: str
@@ -1345,7 +1306,12 @@ def generate_note_audio(request: GenerateNoteAudioRequest):
             sentence_field = mapping.get("sentence") if mapping else "Sentence"
             sentence_audio_field = mapping.get("sentence_audio") if mapping else "SentenceAudio"
 
-            sentence = _get_note_field(note, sentence_field)
+            # Allow overriding the sentence text from the request (useful for unsaved UI drafts)
+            sentence = None
+            if getattr(request, 'textOverride', None):
+                sentence = str(request.textOverride or '').strip()
+            if not sentence:
+                sentence = _get_note_field(note, sentence_field)
             if not sentence:
                 raise HTTPException(status_code=400, detail="Note has no Sentence text")
 
@@ -2179,7 +2145,7 @@ class OpenBrowseRequest(BaseModel):
 @app.post("/api/notes/{note_id}/update")
 def update_note_endpoint(note_id: int, payload: UpdatePayload):
     try:
-        logger.info("Note update started note_id=%s", note_id)
+        # logger.info("Note update started note_id=%s payload=%s", note_id, payload.model_dump() if hasattr(payload, 'model_dump') else payload)
         
         # Get model name to find mapping
         note_info = anki.invoke("notesInfo", {"notes": [note_id]})
@@ -2217,6 +2183,17 @@ def update_note_endpoint(note_id: int, payload: UpdatePayload):
                     # clear sentence_audio so `anki.update_note` will handle storing the Tatoeba media
                     sentence_audio_for_update = None
 
+        # logger.info(
+        #     "Note update forwarding note_id=%s jp=%r en=%r glossary=%r sentence_audio=%r expression_audio=%r audio_id=%r mapping=%s",
+        #     note_id,
+        #     payload.jp,
+        #     payload.en,
+        #     payload.glossary,
+        #     sentence_audio_for_update,
+        #     payload.expression_audio,
+        #     audio_id_param,
+        #     mapping,
+        # )
         anki.update_note(
             note_id,
             jp=payload.jp,

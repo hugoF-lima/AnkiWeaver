@@ -383,6 +383,8 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
 
       setTtsGenerating(true);
       try {
+        const textToUse = (isManualEditMode && (sentenceDraft || '').trim()) ? sentenceDraft : sentenceText;
+
         const res = await fetch(`/api/tts/generate-note-audio`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -391,6 +393,7 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
             voiceName: ttsVoice,
             generateSentenceAudio: ttsFillSentenceAudio && canGenerateSentenceAudio,
             generateExpressionAudio: ttsFillExpressionAudio && canGenerateExpressionAudio,
+            textOverride: textToUse,
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -410,7 +413,7 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
       } finally {
         setTtsGenerating(false);
       }
-    }, [noteId, canGenerateTts, ttsGenerating, ttsVoice, mapping, onUpdateField, canGenerateSentenceAudio, canGenerateExpressionAudio, wordAudioField, ttsFillSentenceAudio, ttsFillExpressionAudio]);
+    }, [noteId, canGenerateTts, ttsGenerating, ttsVoice, mapping, onUpdateField, canGenerateSentenceAudio, canGenerateExpressionAudio, wordAudioField, ttsFillSentenceAudio, ttsFillExpressionAudio, isManualEditMode, sentenceDraft, sentenceText]);
 
     const handlePreviewTtsVoice = useCallback(async () => {
       if (!noteId) return;
@@ -418,7 +421,7 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
 
       setTtsPreviewing(true);
       try {
-        const sampleText = sentenceText || 'こんにちは';
+        const sampleText = (isManualEditMode && (sentenceDraft || '').trim()) ? sentenceDraft : (sentenceText || 'こんにちは');
         const res = await fetch(`/api/tts/voice-preview`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -434,7 +437,7 @@ export const CardContext = forwardRef<HTMLDivElement, CardContextProps>(
       } finally {
         setTtsPreviewing(false);
       }
-    }, [noteId, playAudio, sentenceText, ttsPreviewing, ttsVoice]);
+    }, [noteId, playAudio, sentenceText, ttsPreviewing, ttsVoice, isManualEditMode, sentenceDraft]);
 
     // Filter the available options for the checkbox menu
     const availableOptions = useMemo(() => {

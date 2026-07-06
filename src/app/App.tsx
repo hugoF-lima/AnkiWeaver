@@ -442,6 +442,12 @@ export default function App() {
       }
       return c;
     }));
+    // Also update explicitCard (single-note fetched for off-page selection)
+    setExplicitCard(prev => {
+      if (!prev) return prev;
+      if (prev.noteId !== noteId) return prev;
+      return { ...prev, fields: prev.fields.map(f => f.label === label ? { ...f, value } : f) };
+    });
   };
 
   const getMediaFile = async (filename: string) => {

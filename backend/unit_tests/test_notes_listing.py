@@ -51,7 +51,8 @@ class TestNotesListingAndFiltering(unittest.TestCase):
         self.assertGreaterEqual(len(find_calls), 2)
         query = find_calls[-1][1]["query"]
         self.assertIn('deck:"Deck"', query)
-        self.assertIn('-"MySentenceAudio:re:\\[sound:"', query)
+        self.assertIn('-MySentenceAudio:re:\[sound:', query)
+        self.assertNotIn('-"MySentenceAudio:re:\[sound:"', query)
         self.assertIn("notes", out)
         self.assertEqual(out["total"], 3)
 
@@ -139,11 +140,12 @@ class TestNotesListingAndFiltering(unittest.TestCase):
 
         with patch("anki.invoke", side_effect=fake_invoke):
             with patch.object(main, "_get_profile_mapping", return_value=mapping):
-                out = main.get_note_ids(deck="Deck", limit=500, offset=0, sort="most_recent", filters="contains_audio")
+                out = main.get_note_ids(deck="Deck", limit=500, offset=0, sort="most_recent", filters="contains_audio,contains_entry_audio")
 
         find_calls = [c for c in calls if c[0] == "findNotes"]
         query = find_calls[-1][1]["query"]
-        self.assertIn('"SentenceAudio:re:\\[sound:', query)
+        self.assertIn('SentenceAudio:re:\[sound:', query)
+        self.assertIn('Audio:re:\[sound:', query)
         self.assertEqual(out["noteIds"], [12, 11])
 
     def test_get_notes_empty_deck_returns_empty_payload(self):
